@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import collections
+import functools
 import itertools
 import json
 import logging
@@ -320,3 +321,15 @@ def validate_absolute_path(path):
     if not os.path.isabs(path):
         raise ValueError(f"The path {path} is not a valid absolute path")
     return True
+
+
+def time_it(func):
+    @functools.wraps(func)
+    def _time_it(*args, **kwargs):
+        start = datetime.now()
+        result = func(*args, **kwargs)
+        end = datetime.now()
+        logging.info("Time spent in %s is: %s seconds", func.__name__, (end - start).total_seconds())
+        return result
+
+    return _time_it

@@ -8,7 +8,7 @@
 # or in the "LICENSE.txt" file accompanying this file. This file is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
 # OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions and
 # limitations under the License.
-
+import functools
 import logging
 import os
 import re
@@ -26,6 +26,8 @@ from slurm_plugin.slurm_resources import (
     StaticNode,
     parse_nodename,
 )
+
+from common.utils import time_it
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +82,7 @@ def is_static_node(nodename):
     return "st" == node_type
 
 
+@time_it
 def update_nodes(
     nodes,
     nodeaddrs=None,
@@ -130,6 +133,7 @@ def update_nodes(
         )
 
 
+@time_it
 def update_partitions(partitions, state):
     succeeded_partitions = []
     # Validation to sanitize the input argument and make it safe to use the function affected by B604
@@ -148,6 +152,7 @@ def update_partitions(partitions, state):
     return succeeded_partitions
 
 
+@time_it
 def update_all_partitions(state, reset_node_addrs_hostname):
     """Update partitions to a state and reset nodesaddr/nodehostname if needed."""
     try:
@@ -244,6 +249,7 @@ def set_nodes_idle(nodes, reason=None, reset_node_addrs_hostname=False):
         update_nodes(nodes=nodes, state="resume", reason=reason, raise_on_error=False)
 
 
+@time_it
 def get_nodes_info(nodes="", command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT):
     """
     Retrieve SlurmNode list from slurm nodelist notation.
@@ -261,6 +267,7 @@ def get_nodes_info(nodes="", command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT):
     return _parse_nodes_info(nodeinfo_str)
 
 
+@time_it
 def get_partition_info(command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT, get_all_nodes=True):
     """Retrieve slurm partition info from scontrol."""
     show_partition_info_command = f'{SCONTROL} show partitions | grep -oP "^PartitionName=\\K(\\S+)| State=\\K(\\S+)"'
@@ -286,11 +293,13 @@ def resume_powering_down_nodes():
     update_nodes(nodes=powering_down_nodes, state="resume", raise_on_error=False)
 
 
+@time_it
 def _parse_partition_name_and_state(partition_info):
     """Parse partition name and state from scontrol output."""
     return grouper(partition_info.splitlines(), 2)
 
 
+@time_it
 def _get_all_partition_nodes(partition_name, command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT):
     """Get all nodes in partition."""
     # Validation to sanitize the input argument and make it safe to use the function affected by B604
@@ -300,6 +309,7 @@ def _get_all_partition_nodes(partition_name, command_timeout=DEFAULT_GET_INFO_CO
     return check_command_output(show_all_nodes_command, timeout=command_timeout, shell=True).strip()  # nosec B604
 
 
+@time_it
 def _get_slurm_nodes(states=None, partition_name=None, command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT):
     sinfo_command = f"{SINFO} -h -N -o %N"
     if partition_name:
@@ -313,6 +323,7 @@ def _get_slurm_nodes(states=None, partition_name=None, command_timeout=DEFAULT_G
     return check_command_output(sinfo_command, timeout=command_timeout, shell=True).splitlines()  # nosec B604
 
 
+@time_it
 def _get_partition_nodes(partition_name, command_timeout=DEFAULT_GET_INFO_COMMAND_TIMEOUT):
     """Get up nodes in a parition by querying sinfo, and filtering out power_down nodes."""
     all_nodes = _get_slurm_nodes(partition_name=partition_name)
