@@ -78,6 +78,7 @@ class FleetManagerFactory:
         all_or_nothing,
         run_instances_overrides,
         create_fleet_overrides,
+        launch_template_info,
     ):
         try:
             queue_config = fleet_config[queue]
@@ -104,6 +105,7 @@ class FleetManagerFactory:
                 compute_resource_config,
                 all_or_nothing,
                 create_fleet_overrides.get(queue, {}).get(compute_resource, {}),
+                launch_template_info,
             )
         elif api == "run-instances":
             return Ec2RunInstancesManager(
@@ -115,6 +117,7 @@ class FleetManagerFactory:
                 compute_resource_config,
                 all_or_nothing,
                 run_instances_overrides.get(queue, {}).get(compute_resource, {}),
+                launch_template_info,
             )
         else:
             raise FleetManagerException(
@@ -136,6 +139,7 @@ class FleetManager(ABC):
         compute_resource_config,
         all_or_nothing,
         launch_overrides,
+        launch_template_info,
     ):
         self._cluster_name = cluster_name
         self._region = region
@@ -145,6 +149,24 @@ class FleetManager(ABC):
         self._compute_resource_config = compute_resource_config
         self._all_or_nothing = all_or_nothing
         self._launch_overrides = launch_overrides
+        self._launch_template_info = launch_template_info
+
+    def _get_launch_template_id(self):
+        launch_template_id = (
+            self._launch_template_info.get("Queues", {})
+            .get(self._queue, {})
+            .get("ComputeResources", {})
+            .get(self._compute_resource, {})
+            .get("LaunchTemplate", {})
+            .get("Id", None)
+        )
+
+        if not launch_template_id:
+            raise ValueError(
+                f"Unable to determine Launch Template ID of queue ({self._queue}), "
+                f"compute resource ({self._compute_resource})"
+            )
+        return launch_template_id
 
     @abstractmethod
     def _evaluate_launch_params(self, count):
@@ -180,6 +202,7 @@ class Ec2RunInstancesManager(FleetManager):
         compute_resource_config,
         all_or_nothing,
         launch_overrides,
+        launch_template_info,
     ):
         super().__init__(
             cluster_name,
@@ -190,6 +213,7 @@ class Ec2RunInstancesManager(FleetManager):
             compute_resource_config,
             all_or_nothing,
             launch_overrides,
+            launch_template_info,
         )
 
     def _evaluate_launch_params(self, count):
@@ -200,7 +224,7 @@ class Ec2RunInstancesManager(FleetManager):
             "MaxCount": count,
             # LaunchTemplate is different for every compute resources in every queue
             "LaunchTemplate": {
-                "LaunchTemplateName": f"{self._cluster_name}-{self._queue}-{self._compute_resource}",
+                "LaunchTemplateId": self._get_launch_template_id(),
                 "Version": "$Latest",
             },
         }
@@ -232,6 +256,7 @@ class Ec2CreateFleetManager(FleetManager):
         compute_resource_config,
         all_or_nothing,
         launch_overrides,
+        launch_template_info,
     ):
         super().__init__(
             cluster_name,
@@ -242,6 +267,7 @@ class Ec2CreateFleetManager(FleetManager):
             compute_resource_config,
             all_or_nothing,
             launch_overrides,
+            launch_template_info,
         )
 
     def _evaluate_template_overrides(self) -> list:
@@ -302,7 +328,6 @@ class Ec2CreateFleetManager(FleetManager):
                         "CapacityReservationOptions": {"UsageStrategy": "use-capacity-reservations-first"},
                     },
                 }
-
             template_overrides = self._evaluate_template_overrides()
 
             launch_params = {
@@ -310,7 +335,7 @@ class Ec2CreateFleetManager(FleetManager):
                     {
                         "LaunchTemplateSpecification": {
                             # LaunchTemplate is different for every compute resources in every queue
-                            "LaunchTemplateName": f"{self._cluster_name}-{self._queue}-{self._compute_resource}",
+                            "LaunchTemplateId": self._get_launch_template_id(),
                             "Version": "$Latest",
                         },
                         "Overrides": template_overrides,

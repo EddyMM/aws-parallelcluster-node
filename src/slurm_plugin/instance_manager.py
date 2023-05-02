@@ -57,6 +57,7 @@ class InstanceManager:
         region,
         cluster_name,
         boto3_config,
+        launch_template_info,
         table_name=None,
         hosted_zone=None,
         dns_domain=None,
@@ -85,6 +86,7 @@ class InstanceManager:
         self._boto3_resource_factory = lambda resource_name: boto3.session.Session().resource(
             resource_name, region_name=region, config=boto3_config
         )
+        self._launch_template_info = launch_template_info
 
     def _clear_failed_nodes(self):
         """Clear and reset failed nodes list."""
@@ -112,6 +114,7 @@ class InstanceManager:
                     all_or_nothing_batch,
                     self._run_instances_overrides,
                     self._create_fleet_overrides,
+                    self._launch_template_info,
                 )
                 for batch_nodes in grouper(slurm_node_list, launch_batch_size):
                     try:

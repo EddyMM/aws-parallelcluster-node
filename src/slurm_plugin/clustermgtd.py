@@ -402,7 +402,16 @@ class ClusterManager:
                 event_logger, config.cluster_name, "HeadNode", "clustermgtd", config.head_node_instance_id
             )
             self._compute_fleet_status_manager = ComputeFleetStatusManager()
-            self._instance_manager = self._initialize_instance_manager(config)
+
+            # Load launch templates configuration
+            launch_template_config_file_path = os.environ.get(
+                "LAUNCH_TEMPLATE_CONFIG_FILE",
+                "/opt/parallelcluster/shared/launch-templates-config.json",
+            )
+            with open(launch_template_config_file_path, "r", encoding="utf-8") as launch_template_config_file:
+                launch_template_config = json.load(launch_template_config_file)
+                log.info("Launch template config: %s", launch_template_config)
+            self._instance_manager = self._initialize_instance_manager(config, launch_template_config)
             self._console_logger = self._initialize_console_logger(config)
 
     def shutdown(self):
@@ -411,12 +420,13 @@ class ClusterManager:
             self._task_executor = None
 
     @staticmethod
-    def _initialize_instance_manager(config):
+    def _initialize_instance_manager(config, launch_template_config):
         """Initialize instance manager class that will be used to launch/terminate/describe instances."""
         return InstanceManager(
             config.region,
             config.cluster_name,
             config.boto3_config,
+            launch_template_info=launch_template_config,
             table_name=config.dynamodb_table,
             hosted_zone=config.hosted_zone,
             dns_domain=config.dns_domain,

@@ -11,6 +11,7 @@
 
 
 import argparse
+import json
 import logging
 import os
 from configparser import ConfigParser
@@ -148,7 +149,7 @@ def _handle_failed_nodes(node_list, reason="Failure when resuming nodes"):
         log.error("Failed to place nodes %s into down with exception: %s", print_with_count(node_list), e)
 
 
-def _resume(arg_nodes, resume_config):
+def _resume(arg_nodes, resume_config, launch_template_config):
     """Launch new EC2 nodes according to nodes requested by slurm."""
     # Check heartbeat
     current_time = datetime.now(tz=timezone.utc)
@@ -175,6 +176,7 @@ def _resume(arg_nodes, resume_config):
         resume_config.region,
         resume_config.cluster_name,
         resume_config.boto3_config,
+        launch_template_info=launch_template_config,
         table_name=resume_config.dynamodb_table,
         hosted_zone=resume_config.hosted_zone,
         dns_domain=resume_config.dns_domain,
@@ -215,6 +217,7 @@ def _resume(arg_nodes, resume_config):
 
 def main():
     default_log_file = "/var/log/parallelcluster/slurm_resume.log"
+
     logging.basicConfig(
         filename=default_log_file,
         level=logging.INFO,
@@ -227,6 +230,14 @@ def main():
     try:
         config_file = os.environ.get("CONFIG_FILE", os.path.join(CONFIG_FILE_DIR, "parallelcluster_slurm_resume.conf"))
         resume_config = SlurmResumeConfig(config_file)
+
+        launch_template_config_file_path = os.environ.get(
+            "LAUNCH_TEMPLATE_CONFIG_FILE",
+            "/opt/parallelcluster/shared/launch-templates-config.json",
+        )
+        with open(launch_template_config_file_path, "r", encoding="utf-8") as launch_template_config_file:
+            launch_template_config = json.load(launch_template_config_file)
+            log.info("Launch template config: %s", launch_template_config)
         try:
             # Configure root logger
             fileConfig(resume_config.logging_config, disable_existing_loggers=False)
@@ -238,7 +249,7 @@ def main():
                 e,
             )
         log.info("ResumeProgram config: %s", resume_config)
-        _resume(args.nodes, resume_config)
+        _resume(args.nodes, resume_config, launch_template_config)
         log.info("ResumeProgram finished.")
     except Exception as e:
         log.exception("Encountered exception when requesting instances for %s: %s", args.nodes, e)
