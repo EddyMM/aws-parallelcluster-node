@@ -227,11 +227,11 @@ class InstanceManager(ABC):
             # Submit calls to change_resource_record_sets in batches of max 500 elements each.
             # change_resource_record_sets API call has limit of 1000 changes,
             # but the UPSERT action counts for 2 calls
-            # Also pick the number of retries to be the max between the globally configured one and 3.
+            # Also pick the number of retries to be the max between the globally configured one and 4.
             # This is done to address Route53 API throttling without changing the configured retries for all API calls.
             configured_retry = self._boto3_config.retries.get("max_attempts", 0) if self._boto3_config.retries else 0
             boto3_config = self._boto3_config.merge(
-                Config(retries={"max_attempts": max([configured_retry, 3]), "mode": "standard"})
+                Config(retries={"max_attempts": max([configured_retry, 4]), "mode": "standard"})
             )
             route53_client = boto3.client("route53", region_name=self._region, config=boto3_config)
             changes_batch_size = min(update_dns_batch_size, 500)
@@ -676,15 +676,17 @@ class JobLevelScalingInstanceManager(InstanceManager):
         update_node_address,
         scaling_strategy: ScalingStrategy,
     ):
-        # Optimize job level scaling with preliminary scale-all nodes attempt
-        self._update_dict(
-            self.unused_launched_instances,
-            self._launch_instances(
-                nodes_to_launch=self._parse_nodes_resume_list(node_list),
-                launch_batch_size=launch_batch_size,
-                scaling_strategy=scaling_strategy,
-            ),
-        )
+        if not (scaling_strategy in [ScalingStrategy.ALL_OR_NOTHING] and len(job_list) <= 1):
+            # Optimize job level scaling with preliminary scale-all nodes attempt
+            # Except for the case all-or-nothing / single job, to avoid scaling twice the same node list
+            self._update_dict(
+                self.unused_launched_instances,
+                self._launch_instances(
+                    nodes_to_launch=self._parse_nodes_resume_list(node_list),
+                    launch_batch_size=launch_batch_size,
+                    scaling_strategy=scaling_strategy,
+                ),
+            )
 
         # Avoid a job level launch if scaling strategy is BEST_EFFORT or GREEDY_ALL_OR_NOTHING
         # The scale all-in launch has been performed already hence from this point we want to skip the extra
@@ -907,7 +909,9 @@ class JobLevelScalingInstanceManager(InstanceManager):
                 # set limited capacity on the failed to launch nodes
                 self._update_failed_nodes(set(failed_launch_nodes), "LimitedInstanceCapacity", override=False)
         else:
-            # No instances launched at all, e.g. CreateFleet API returns no EC2 instances
+            # No instances launched at all, e.g. CreateFleet API returns no EC2 instances,
+            # or no left instances available from a best-effort EC2 launch
+            logger.info("No launched instances found for nodes %s", print_with_count(nodes_resume_list))
             self._update_failed_nodes(set(nodes_resume_list), "InsufficientInstanceCapacity", override=False)
 
     def all_or_nothing_node_assignment(
@@ -960,7 +964,9 @@ class JobLevelScalingInstanceManager(InstanceManager):
             self._update_dict(self.unused_launched_instances, instances_launched)
             self._update_failed_nodes(set(nodes_resume_list), "LimitedInstanceCapacity", override=False)
         else:
-            # No instances launched at all, e.g. CreateFleet API returns no EC2 instances
+            # No instances launched at all, e.g. CreateFleet API returns no EC2 instances,
+            # or no left instances available from a best-effort EC2 launch
+            logger.info("No launched instances found for nodes %s", print_with_count(nodes_resume_list))
             self._update_failed_nodes(set(nodes_resume_list), "InsufficientInstanceCapacity", override=False)
 
     def _launch_instances(  # noqa: C901
@@ -1105,12 +1111,14 @@ class JobLevelScalingInstanceManager(InstanceManager):
                         batch_nodes = []
                         try:
                             batch_nodes, batch_launched_ec2_instances = zip(*batch)
-                            assigned_nodes = self._update_slurm_node_addrs(
-                                slurm_nodes=list(batch_nodes), launched_instances=batch_launched_ec2_instances
-                            )
+                            assigned_nodes = dict(batch)
+
                             self._store_assigned_hostnames(nodes=assigned_nodes)
                             self._update_dns_hostnames(
                                 nodes=assigned_nodes, update_dns_batch_size=assign_node_batch_size
+                            )
+                            self._update_slurm_node_addrs(
+                                slurm_nodes=list(batch_nodes), launched_instances=batch_launched_ec2_instances
                             )
                         except (NodeAddrUpdateError, HostnameTableStoreError, HostnameDnsStoreError):
                             if raise_on_error:
@@ -1138,9 +1146,6 @@ class JobLevelScalingInstanceManager(InstanceManager):
                 "Nodes are now configured with instances %s",
                 print_with_count(zip(slurm_nodes, launched_instances)),
             )
-
-            return dict(zip(slurm_nodes, launched_instances))
-
         except subprocess.CalledProcessError:
             logger.error(
                 "Encountered error when updating nodes %s with instances %s",

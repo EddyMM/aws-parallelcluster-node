@@ -19,6 +19,7 @@ import boto3
 from botocore.exceptions import ClientError
 from common.ec2_utils import get_private_ip_address_and_dns_name
 from common.utils import setup_logging_filter
+from retrying import retry
 from slurm_plugin.common import print_with_count
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,14 @@ class FleetManager(ABC):
     def _launch_instances(self, launch_params):
         """Launch a batch of ec2 instances."""
 
+    # Retry is sized to let RunInstance refill rate (2) be able to refill the default launch_max_batch_size (500)
+    @retry(
+        wait_exponential_multiplier=1000,
+        wait_exponential_max=300000,
+        wait_jitter_max=500,
+        stop_max_attempt_number=10,
+        retry_on_exception=lambda exception: "Request limit exceeded" in str(exception),
+    )
     def launch_ec2_instances(self, count, job_id=None):
         """
         Launch EC2 instances.
@@ -186,7 +195,7 @@ class FleetManager(ABC):
                     "Launched the following instances %s",
                     print_with_count([instance.get("InstanceId", "") for instance in assigned_nodes.get("Instances")]),
                 )
-                logger.debug("Full launched instances information: %s", assigned_nodes.get("Instances"))
+                logger.debug("Launched instances information: %s", assigned_nodes.get("Instances"))
 
         return [EC2Instance.from_describe_instance_data(instance_info) for instance_info in assigned_nodes["Instances"]]
 
@@ -239,7 +248,12 @@ class Ec2RunInstancesManager(FleetManager):
         try:
             return run_instances(self._region, self._boto3_config, launch_params)
         except ClientError as e:
-            logger.error("Failed RunInstances request: %s", e.response.get("ResponseMetadata").get("RequestId"))
+            logger.error(
+                "Failed RunInstances request (%s): %s - %s",
+                e.response.get("ResponseMetadata", {}).get("RequestId"),
+                e.response.get("Error", {}).get("Code"),
+                e.response.get("Error", {}).get("Message"),
+            )
             raise e
 
 
@@ -388,7 +402,12 @@ class Ec2CreateFleetManager(FleetManager):
                 raise LaunchInstancesError(err_list[0].get("ErrorCode"), err_list[0].get("ErrorMessage"))
             return {"Instances": instances}
         except ClientError as e:
-            logger.error("Failed CreateFleet request: %s", e.response.get("ResponseMetadata", {}).get("RequestId"))
+            logger.error(
+                "Failed CreateFleet request (%s): %s - %s",
+                e.response.get("ResponseMetadata", {}).get("RequestId"),
+                e.response.get("Error", {}).get("Code"),
+                e.response.get("Error", {}).get("Message"),
+            )
             raise e
 
     def _get_instances_info(self, instance_ids: list):
